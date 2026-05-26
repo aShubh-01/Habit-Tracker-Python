@@ -1,5 +1,8 @@
 import streamlit as st
-from extra_streamlit_components import CookieManager
-cookie_manager = CookieManager()
+from db.database import ping
 
-st.title("Works 2")
+st.write("Before ping")
+
+ok, err = ping()
+
+st.write("After ping")
