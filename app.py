@@ -33,39 +33,68 @@ def get_cookie_from_headers(cookie_name: str) -> Optional[str]:
     try:
         headers = st.context.headers
         cookie_header = headers.get("cookie") or headers.get("Cookie")
-        if not cookie_header:
-            return None
-        for cookie in cookie_header.split(";"):
-            parts = cookie.split("=", 1)
-            if len(parts) == 2:
-                name = parts[0].strip()
-                val = parts[1].strip()
-                if name == cookie_name:
-                    if val.startswith('"') and val.endswith('"'):
-                        val = val[1:-1]
-                    return urllib.parse.unquote(val)
-    except Exception:
-        pass
+        cookies_dict = dict(st.context.cookies)
+        
+        with open("scratch/load_session_log.txt", "a") as f:
+            f.write(f"[get_cookie_from_headers] Raw header: {cookie_header[:50] if cookie_header else 'None'}...\n")
+            f.write(f"[get_cookie_from_headers] st.context.cookies keys: {list(cookies_dict.keys())}\n")
+            f.write(f"[get_cookie_from_headers] st.context.cookies value: {cookies_dict.get(cookie_name)[:20] if cookies_dict.get(cookie_name) else 'None'}...\n")
+            
+        # Try st.context.cookies first
+        val = st.context.cookies.get(cookie_name)
+        if val:
+            if val.startswith('"') and val.endswith('"'):
+                val = val[1:-1]
+            return urllib.parse.unquote(val)
+            
+        # Fallback to manual parsing
+        if cookie_header:
+            for cookie in cookie_header.split(";"):
+                parts = cookie.split("=", 1)
+                if len(parts) == 2:
+                    name = parts[0].strip()
+                    val = parts[1].strip()
+                    if name == cookie_name:
+                        if val.startswith('"') and val.endswith('"'):
+                            val = val[1:-1]
+                        return urllib.parse.unquote(val)
+    except Exception as e:
+        with open("scratch/load_session_log.txt", "a") as f:
+            f.write(f"[get_cookie_from_headers] Error: {e}\n")
     return None
 
 
 def _load_session():
     """Read JWT from cookie and validate. Populates st.session_state['user']."""
-    if "user" not in st.session_state or st.session_state.get("user") is None:
-        token = get_cookie_from_headers(JWT_COOKIE_NAME)
-        if not token:
-            token = cookie_manager.get(JWT_COOKIE_NAME)
-        if token:
-            user = validate_token(token)
-            if user:
-                st.session_state["user"] = user
-                st.session_state["token"] = token
+    try:
+        if "user" not in st.session_state or st.session_state.get("user") is None:
+            token = get_cookie_from_headers(JWT_COOKIE_NAME)
+            token_src = "header"
+            if not token:
+                token = cookie_manager.get(JWT_COOKIE_NAME)
+                token_src = "cookie_manager"
+            
+            with open("scratch/load_session_log.txt", "a") as f:
+                f.write(f"[_load_session] Found token from {token_src}: {token[:15] if token else 'None'}...\n")
+                
+            if token:
+                user = validate_token(token)
+                with open("scratch/load_session_log.txt", "a") as f:
+                    f.write(f"[_load_session] Validated user: {user.get('username') if user else 'None'}\n")
+                if user:
+                    st.session_state["user"] = user
+                    st.session_state["token"] = token
+                else:
+                    # Token expired or invalid — clear it
+                    with open("scratch/load_session_log.txt", "a") as f:
+                        f.write(f"[_load_session] Token validation failed. Deleting cookie...\n")
+                    cookie_manager.delete(JWT_COOKIE_NAME)
+                    st.session_state["user"] = None
             else:
-                # Token expired or invalid — clear it
-                cookie_manager.delete(JWT_COOKIE_NAME)
                 st.session_state["user"] = None
-        else:
-            st.session_state["user"] = None
+    except Exception as e:
+        with open("scratch/load_session_log.txt", "a") as f:
+            f.write(f"[_load_session] Exception in load session: {e}\n")
 
 
 def _render_sidebar(user: dict):
@@ -116,13 +145,15 @@ def _render_sidebar(user: dict):
             "⚙️ Settings":           "settings",
         }
 
-        current = st.session_state.get("current_page", "today")
-        current_label = next((k for k, v in PAGE_KEY_MAP.items() if v == current), nav_items[0])
+        if "sidebar_nav" not in st.session_state:
+            current = st.session_state.get("current_page", "today")
+            current_label = next((k for k, v in PAGE_KEY_MAP.items() if v == current), nav_items[0])
+            st.session_state["sidebar_nav"] = current_label
 
         selected = st.radio(
             "Navigation",
             nav_items,
-            index=nav_items.index(current_label) if current_label in nav_items else 0,
+            key="sidebar_nav",
             label_visibility="collapsed",
         )
         st.session_state["current_page"] = PAGE_KEY_MAP[selected]
@@ -166,6 +197,9 @@ def _render_page(page_key: str):
 # ─── Main ─────────────────────────────────────────────────────────────────────
 def main():
     _load_session()
+    
+    with open("scratch/navigation_log.txt", "a") as f:
+        f.write(f"[main] query_params={dict(st.query_params)}, current_page={st.session_state.get('current_page')}, keys={list(st.session_state.keys())}\n")
 
     user = st.session_state.get("user")
 
@@ -191,27 +225,32 @@ def main():
                 f.write(f"Query params detected: action={action}, id={task_id}\n")
             
             if action and task_id:
-                user_id = user["id"]
-                with open("scratch/query_log.txt", "a") as f:
-                    f.write(f"Processing action={action} for user={user_id} and task={task_id}\n")
-                if action == "toggle":
-                    from services.schedule_service import toggle_completion
-                    toggle_completion(task_id, user_id)
-                    from services.auth_service import get_user_by_id
-                    st.session_state["user"] = get_user_by_id(user_id)
-                elif action == "delete":
-                    from services.schedule_service import delete_schedule_entry
-                    delete_schedule_entry(task_id)
-                elif action == "extend":
-                    from services.schedule_service import extend_task_time
-                    extend_task_time(task_id, 30)
-                elif action == "compress":
-                    from services.schedule_service import extend_task_time
-                    extend_task_time(task_id, -30)
+                if not st.session_state.get("query_param_processed"):
+                    st.session_state["query_param_processed"] = True
+                    user_id = user["id"]
+                    with open("scratch/query_log.txt", "a") as f:
+                        f.write(f"Processing action={action} for user={user_id} and task={task_id}\n")
+                    if action == "toggle":
+                        from services.schedule_service import toggle_completion
+                        toggle_completion(task_id, user_id)
+                        from services.auth_service import get_user_by_id
+                        st.session_state["user"] = get_user_by_id(user_id)
+                    elif action == "delete":
+                        from services.schedule_service import delete_schedule_entry
+                        delete_schedule_entry(task_id)
+                    elif action == "extend":
+                        from services.schedule_service import extend_task_time
+                        extend_task_time(task_id, 30)
+                    elif action == "compress":
+                        from services.schedule_service import extend_task_time
+                        extend_task_time(task_id, -30)
                     
-                st.session_state["current_page"] = "schedule"
-                st.query_params.clear()
-                st.rerun()
+                    st.session_state["current_page"] = "schedule"
+                    st.session_state["sidebar_nav"] = "🗓️ Routine Planner"
+                    st.query_params.clear()
+                    st.rerun()
+        else:
+            st.session_state["query_param_processed"] = False
 
         _render_sidebar(user)
         page = st.session_state.get("current_page", "today")
