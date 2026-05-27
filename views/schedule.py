@@ -30,28 +30,6 @@ def get_hour_label(h: int) -> str:
     return f"{h-12} PM"
 
 
-def extend_task_time(task_id: str, delta_minutes: int):
-    """Increase or decrease the duration of a scheduled task by modifying end_time."""
-    schedules = get_collection("scheduled_habits")
-    entry = schedules.find_one({"_id": task_id})
-    if entry:
-        try:
-            # Parse times
-            start_dt = datetime.strptime(entry["start_time"], "%H:%M")
-            end_dt = datetime.strptime(entry["end_time"], "%H:%M")
-            
-            # Apply offset
-            new_end_dt = end_dt + timedelta(minutes=delta_minutes)
-            
-            # Verify duration remains valid and >= 15 minutes
-            duration = (new_end_dt - start_dt).total_seconds() / 60.0
-            if duration >= 15:
-                schedules.update_one(
-                    {"_id": task_id},
-                    {"$set": {"end_time": new_end_dt.strftime("%H:%M")}}
-                )
-        except Exception:
-            pass
 
 
 @st.dialog("➕ Add Task to Schedule")
@@ -213,12 +191,6 @@ def render_calendar_grid(schedule_items: list, view_mode: str, active_date: date
                         <a href="?action=toggle&id={item['id']}" target="_self" style="text-decoration: none; font-size: 0.75rem;" title="Toggle Completion">
                             {check_symbol}
                         </a>
-                        <a href="?action=extend&id={item['id']}" target="_self" style="text-decoration: none; font-size: 0.65rem; font-weight: bold; color: {text_col};" title="Extend duration +30m">
-                            ➕
-                        </a>
-                        <a href="?action=compress&id={item['id']}" target="_self" style="text-decoration: none; font-size: 0.65rem; font-weight: bold; color: {text_col};" title="Compress duration -30m">
-                            ➖
-                        </a>
                     </div>
                     <a href="?action=delete&id={item['id']}" target="_self" style="text-decoration: none; font-size: 0.7rem;" title="Delete Slot">
                         🗑️
@@ -268,27 +240,6 @@ def render_schedule():
 
     page_header("🗓️ Routine Planner", "Build your daily routine calendar. Assign habits to specific time slots.")
 
-    # ── Handle Click Actions from Query Parameters ───────────────────────────
-    if st.query_params:
-        action = st.query_params.get("action")
-        task_id = st.query_params.get("id")
-        
-        if action and task_id:
-            if action == "toggle":
-                from services.schedule_service import toggle_completion
-                toggle_completion(task_id, user_id)
-                from services.auth_service import get_user_by_id
-                st.session_state["user"] = get_user_by_id(user_id)
-            elif action == "delete":
-                from services.schedule_service import delete_schedule_entry
-                delete_schedule_entry(task_id)
-            elif action == "extend":
-                extend_task_time(task_id, 30)
-            elif action == "compress":
-                extend_task_time(task_id, -30)
-                
-            st.query_params.clear()
-            st.rerun()
 
     # Initialize states
     if "schedule_active_date" not in st.session_state:
@@ -344,7 +295,7 @@ def render_schedule():
 
     with col_add_task:
         if st.button("➕ Add Task", use_container_width=True, key="trigger_add_task_btn"):
-            show_add_task_modal(user_id, active_date)
+            show_add_task_modal(user_id, date.today())
 
     st.write("")
 

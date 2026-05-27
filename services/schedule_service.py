@@ -220,3 +220,27 @@ def _clean(doc: dict) -> dict:
     d = dict(doc)
     d["id"] = str(d.get("_id", ""))
     return d
+
+
+def extend_task_time(task_id: str, delta_minutes: int):
+    """Increase or decrease the duration of a scheduled task by modifying end_time."""
+    schedules = get_collection("scheduled_habits")
+    entry = schedules.find_one({"_id": task_id})
+    if entry:
+        try:
+            # Parse times
+            start_dt = datetime.strptime(entry["start_time"], "%H:%M")
+            end_dt = datetime.strptime(entry["end_time"], "%H:%M")
+            
+            # Apply offset
+            new_end_dt = end_dt + timedelta(minutes=delta_minutes)
+            
+            # Verify duration remains valid and >= 15 minutes
+            duration = (new_end_dt - start_dt).total_seconds() / 60.0
+            if duration >= 15:
+                schedules.update_one(
+                    {"_id": task_id},
+                    {"$set": {"end_time": new_end_dt.strftime("%H:%M")}}
+                )
+        except Exception:
+            pass

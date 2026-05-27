@@ -26,10 +26,35 @@ from config import JWT_COOKIE_NAME
 from services.auth_service import validate_token
 
 
+import urllib.parse
+from typing import Optional
+
+def get_cookie_from_headers(cookie_name: str) -> Optional[str]:
+    try:
+        headers = st.context.headers
+        cookie_header = headers.get("cookie") or headers.get("Cookie")
+        if not cookie_header:
+            return None
+        for cookie in cookie_header.split(";"):
+            parts = cookie.split("=", 1)
+            if len(parts) == 2:
+                name = parts[0].strip()
+                val = parts[1].strip()
+                if name == cookie_name:
+                    if val.startswith('"') and val.endswith('"'):
+                        val = val[1:-1]
+                    return urllib.parse.unquote(val)
+    except Exception:
+        pass
+    return None
+
+
 def _load_session():
     """Read JWT from cookie and validate. Populates st.session_state['user']."""
     if "user" not in st.session_state or st.session_state.get("user") is None:
-        token = cookie_manager.get(JWT_COOKIE_NAME)
+        token = get_cookie_from_headers(JWT_COOKIE_NAME)
+        if not token:
+            token = cookie_manager.get(JWT_COOKIE_NAME)
         if token:
             user = validate_token(token)
             if user:
@@ -157,6 +182,37 @@ def main():
         from views.auth import render_auth
         render_auth(cookie_manager)
     else:
+        # ── Handle Click Actions from Query Parameters globally ───────────────────
+        if st.query_params:
+            action = st.query_params.get("action")
+            task_id = st.query_params.get("id")
+            
+            with open("scratch/query_log.txt", "a") as f:
+                f.write(f"Query params detected: action={action}, id={task_id}\n")
+            
+            if action and task_id:
+                user_id = user["id"]
+                with open("scratch/query_log.txt", "a") as f:
+                    f.write(f"Processing action={action} for user={user_id} and task={task_id}\n")
+                if action == "toggle":
+                    from services.schedule_service import toggle_completion
+                    toggle_completion(task_id, user_id)
+                    from services.auth_service import get_user_by_id
+                    st.session_state["user"] = get_user_by_id(user_id)
+                elif action == "delete":
+                    from services.schedule_service import delete_schedule_entry
+                    delete_schedule_entry(task_id)
+                elif action == "extend":
+                    from services.schedule_service import extend_task_time
+                    extend_task_time(task_id, 30)
+                elif action == "compress":
+                    from services.schedule_service import extend_task_time
+                    extend_task_time(task_id, -30)
+                    
+                st.session_state["current_page"] = "schedule"
+                st.query_params.clear()
+                st.rerun()
+
         _render_sidebar(user)
         page = st.session_state.get("current_page", "today")
         _render_page(page)
